@@ -1,0 +1,5 @@
+[mysqld]
+# Optional sane defaults for Laravel projects (Unicode / emoji safe).
+# You can edit or remove this file if your environment already enforces these.
+character-set-server = utf8mb4
+collation-server = utf8mb4_unicode_ci

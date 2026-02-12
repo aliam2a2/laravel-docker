@@ -1,0 +1,210 @@
+############################################
+# Docker Compose — Development
+############################################
+#
+# Usage:
+#   docker compose up -d --build
+#
+# COMPOSE_PROFILES in .env controls which optional services start.
+# Set  COMPOSE_PROFILES=horizon,reverb  (or  queue,reverb )  in .env
+#
+# IMPORTANT: Use EITHER 'horizon' OR 'queue', NEVER both.
+#   horizon = Redis queue dashboard  (requires laravel/horizon)
+#   queue   = basic queue:work       (no extra package needed)
+#
+############################################
+
+name: ${COMPOSE_PROJECT_NAME}
+
+services:
+
+  # ─── Web Server (PHP-FPM + NGINX) ──────────────────────────────
+  php:
+    build:
+      context: .
+      target: development
+      args:
+        PHP_BASE_IMAGE: ${PHP_BASE_IMAGE}
+        USER_ID: ${HOST_UID:-1000}
+        GROUP_ID: ${HOST_GID:-1000}
+    image: ${APP_IMAGE}:dev
+    stop_signal: SIGQUIT
+    restart: unless-stopped
+    ports:
+      - "${APP_HTTP_PORT:-80}:8080"
+      - "${APP_HTTPS_PORT:-443}:8443"
+    volumes:
+      - ./:/var/www/html
+    env_file:
+      - ./.env
+    environment:
+      HEALTHCHECK_PATH: "${HEALTHCHECK_PATH:-/up}"
+      SSL_MODE: "${SSL_MODE:-off}"
+      PHP_OPCACHE_ENABLE: "${PHP_OPCACHE_ENABLE:-1}"
+      PHP_MEMORY_LIMIT: "${PHP_MEMORY_LIMIT:-256M}"
+      PHP_MAX_EXECUTION_TIME: "${PHP_MAX_EXECUTION_TIME:-99}"
+      PHP_UPLOAD_MAX_FILE_SIZE: "${PHP_UPLOAD_MAX_FILE_SIZE:-100M}"
+      PHP_POST_MAX_SIZE: "${PHP_POST_MAX_SIZE:-100M}"
+      NGINX_CLIENT_MAX_BODY_SIZE: "${NGINX_CLIENT_MAX_BODY_SIZE:-100M}"
+      # Automations are disabled in development
+      AUTORUN_ENABLED: "false"
+    depends_on:
+      mariadb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - app
+
+  # ─── Task Scheduler ────────────────────────────────────────────
+  scheduler:
+    image: ${APP_IMAGE}:dev
+    command: ["php", "/var/www/html/artisan", "schedule:work"]
+    stop_signal: SIGTERM
+    restart: unless-stopped
+    volumes:
+      - ./:/var/www/html
+    env_file:
+      - ./.env
+    depends_on:
+      php:
+        condition: service_started
+      mariadb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "healthcheck-schedule"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    networks:
+      - app
+
+  # ─── Horizon (advanced Redis queue dashboard) ──────────────────
+  horizon:
+    profiles: ["horizon"]
+    image: ${APP_IMAGE}:dev
+    command: ["php", "/var/www/html/artisan", "horizon"]
+    stop_signal: SIGTERM
+    restart: unless-stopped
+    volumes:
+      - ./:/var/www/html
+    env_file:
+      - ./.env
+    depends_on:
+      php:
+        condition: service_started
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "healthcheck-horizon"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    networks:
+      - app
+
+  # ─── Queue Worker (basic, alternative to Horizon) ──────────────
+  queue:
+    profiles: ["queue"]
+    image: ${APP_IMAGE}:dev
+    command: ["php", "/var/www/html/artisan", "queue:work", "--tries=${QUEUE_TRIES:-3}"]
+    stop_signal: SIGTERM
+    restart: unless-stopped
+    volumes:
+      - ./:/var/www/html
+    env_file:
+      - ./.env
+    depends_on:
+      php:
+        condition: service_started
+      mariadb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "healthcheck-queue"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    networks:
+      - app
+
+  # ─── Reverb (WebSocket Server) ─────────────────────────────────
+  reverb:
+    profiles: ["reverb"]
+    image: ${APP_IMAGE}:dev
+    command: ["php", "/var/www/html/artisan", "reverb:start", "--port=${REVERB_SERVER_PORT:-8000}"]
+    stop_signal: SIGTERM
+    restart: unless-stopped
+    ports:
+      - "${REVERB_EXPOSED_PORT:-8000}:${REVERB_SERVER_PORT:-8000}"
+    volumes:
+      - ./:/var/www/html
+    env_file:
+      - ./.env
+    depends_on:
+      php:
+        condition: service_started
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "healthcheck-reverb"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    networks:
+      - app
+
+  # ─── MariaDB ───────────────────────────────────────────────────
+  mariadb:
+    image: mariadb:${MARIADB_VERSION:-11}
+    restart: unless-stopped
+    ports:
+      - "${MARIADB_EXPOSED_PORT:-3306}:3306"
+    environment:
+      MARIADB_ROOT_PASSWORD: "${MARIADB_ROOT_PASSWORD}"
+      MARIADB_DATABASE: "${MARIADB_DATABASE}"
+      MARIADB_USER: "${MARIADB_USER}"
+      MARIADB_PASSWORD: "${MARIADB_PASSWORD}"
+    volumes:
+      - mariadb_data:/var/lib/mysql
+      - ./docker/mariadb/init:/docker-entrypoint-initdb.d:ro
+      - ./docker/mariadb/conf.d:/etc/mysql/conf.d:ro
+    healthcheck:
+      test: ["CMD", "mariadb-admin", "ping", "-h", "127.0.0.1", "-uroot", "-p${MARIADB_ROOT_PASSWORD}", "--silent"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    networks:
+      - app
+
+  # ─── Redis ─────────────────────────────────────────────────────
+  redis:
+    image: redis:${REDIS_VERSION:-alpine}
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD}"]
+    ports:
+      - "${REDIS_EXPOSED_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    networks:
+      - app
+
+networks:
+  app:
+    driver: bridge
+
+volumes:
+  mariadb_data:
+  redis_data:

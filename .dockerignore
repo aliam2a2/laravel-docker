@@ -1,0 +1,36 @@
+# Secrets — NEVER bake into images
+.env
+.env.*
+!.env.example
+
+# Dependencies (installed during build or mounted in dev)
+vendor/
+node_modules/
+
+# VCS and IDE
+.git/
+.gitignore
+.gitattributes
+.idea/
+.vscode/
+.cursor/
+
+# Docker files (not needed in runtime image)
+docker/
+compose*.yml
+docker-compose*.yml
+Dockerfile
+
+# Documentation
+README.md
+LICENSE
+
+# Testing (run tests in CI, not in the production image)
+tests/
+phpunit.xml
+
+# Runtime artifacts (recreated at container startup)
+storage/logs/
+storage/framework/cache/
+storage/framework/sessions/
+storage/framework/views/

@@ -9,7 +9,8 @@ WORKDIR /var/www/html
 
 # Install PHP extensions required for Laravel + MariaDB + Redis + Horizon
 USER root
-RUN install-php-extensions pdo_mysql redis pcntl
+RUN install-php-extensions intl pdo_mysql redis pcntl zip bcmath exif gd
+
 
 # Drop back to non-root (serversideup/php default user)
 USER www-data
